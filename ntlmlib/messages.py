@@ -150,13 +150,7 @@ class Version(object):
     ====================================================================================================================
     """
     def get_os_version(self):
-        if len(self['os_version']) == 0:
-            return None
-        else:
-            major = struct.unpack('B', self['os_version'][0])[0]
-            minor = struct.unpack('B', self['os_version'][1])[0]
-            build = struct.unpack('H', self['os_version'][2:4])[0]
-            return major, minor, build
+        return struct.unpack('BBH', self['os_version'][:4])
 
 
 class Negotiate(Structure, Version, Message):
@@ -222,6 +216,10 @@ class Negotiate(Structure, Version, Message):
         #if self['TargetInfoFields_len'] > 0:
         #    av_pairs = AV_PAIRS(self['TargetInfoFields'][:self['TargetInfoFields_len']])
         #    self['TargetInfoFields'] = av_pairs
+        if self['flags'] & NegotiateFlag.NTLMSSP_VERSION:
+            self['os_version'] = data[32:40]
+        else:
+            self['os_version'] = ''
 
         return self
 
@@ -239,19 +237,33 @@ class Challenge(Structure, Version, Message):
         ('target_name_offset', '<L=40'),
         ('flags', '<L=0'),
         ('challenge', '8s'),
-        ('reserved', '8s=""'),
+        ('context', '8s=b""'),
         # Windows 9x and NT4 omit the following optional fields, they are
         # parsed based only on the flags bitfield
-        ('target_info_fields_len', ':'),
-        ('target_info_fields_max', ':'),
-        ('target_info_fields_offset', ':'),
+        ('target_info_fields_len','<H-target_info_fields'),
+        ('target_info_fields_max_len','<H-target_info_fields'),
+        ('target_info_fields_offset','<L'),
         ('os_version', ':'),
         ('target_name', ':'),
         ('target_info_fields', ':'))
 
-    def __init__(self):
+    def __init__(self, flags=0, challenge=b'', context=b'', os_version=b'\x06\x00\x70\x17\x00\x00\x00\x0f', target_name='', host_name='', domain_name=''):
         Structure.__init__(self)
-        self['os_version'] = ''
+        self['flags'] = flags
+        self['challenge'] = challenge
+        self['context'] = context
+        self['os_version'] = os_version
+        self['target_name'] = target_name.encode('utf-16le')
+
+        ti = TargetInfo()
+        if target_name:
+            ti[ti.NTLMSSP_AV_TARGET_NAME] = target_name.encode('utf-16-le')
+        if host_name:
+            ti[ti.NTLMSSP_AV_HOSTNAME] = host_name.encode('utf-16-le')
+        if domain_name:
+            ti[ti.NTLMSSP_AV_DOMAINNAME] = domain_name.encode('utf-16-le')
+
+        self['target_info_fields'] = ti
 
     @staticmethod
     def check_version(flags):
@@ -268,8 +280,12 @@ class Challenge(Structure, Version, Message):
         else:
             version_len = 0
         if self['target_info_fields'] is not None and type(self['target_info_fields']) is not str:
-            raw_av_fields = self['target_info_fields'].getData()
+            raw_av_fields = self['target_info_fields'].get_data()
             self['target_info_fields'] = raw_av_fields
+
+        self['target_name_offset'] = 56
+        self['target_info_fields_offset'] = self['target_name_offset'] + len(self['target_name'])
+
         return Structure.get_data(self)
 
     def from_string(self, data):
@@ -333,7 +349,7 @@ class ChallengeResponse(Structure, Version, Message):
         ('session_key_offset','<L'),
         ('flags','<L'),
         #('VersionLen','_-Version','self.check_version(self["flags"])'),
-        ('version',':'),
+        ('os_version',':'),
         ('MICLen','_-MIC'),
         ('mic',':=""'),
         ('domain_name',':'),
@@ -351,7 +367,7 @@ class ChallengeResponse(Structure, Version, Message):
         self['domain_name'] = domain.encode('utf-16le')
         self['user_name'] = username.encode('utf-16le')
         self['host_name'] = b''
-        self['version'] = b''
+        self['os_version'] = b''
         self['mic'] = b''
         self['session_key'] = session_key
 
@@ -372,7 +388,7 @@ class ChallengeResponse(Structure, Version, Message):
         #    version_len = 8
         #else:
          #   version_len = 0
-        self['domain_offset'] = 64 + len(self['mic']) + len(self['version'])
+        self['domain_offset'] = 64 + len(self['mic']) + len(self['os_version'])
         self['user_offset'] = self['domain_offset'] + len(self['domain_name'])
         self['host_offset'] = self['user_offset'] + len(self['user_name'])
         self['lanman_offset'] = self['host_offset'] + len(self['host_name'])
@@ -405,6 +421,11 @@ class ChallengeResponse(Structure, Version, Message):
         lanman_offset = self['lanman_offset']
         lanman_end    = self['lanman_len'] + lanman_offset
         self['lanman'] = data[lanman_offset:lanman_end]
+
+        if self['flags'] & NegotiateFlag.NTLMSSP_VERSION:
+            self['os_version'] = data[64:72]
+        else:
+            self['os_version'] = ''
 
         #if len(data) >= 36:
         #    self['os_version'] = data[32:36]

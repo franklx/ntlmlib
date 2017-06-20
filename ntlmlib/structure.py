@@ -344,12 +344,16 @@ class Structure:
 
         # asciiz specifier
         if field_format == 'z':
+            if not len(data):
+                return ''
             if data[-1] != '\x00':
                 raise Exception("%s 'z' field is not NUL terminated: %r" % (field, data))
             return data[:-1] # remove trailing NUL
 
         # unicode specifier
         if field_format == 'u':
+            if not len(data):
+                return ''
             if data[-2:] != '\x00\x00':
                 raise Exception("%s 'u' field is not NUL-NUL terminated: %r" % (field, data))
             return data[:-2] # remove trailing NUL
